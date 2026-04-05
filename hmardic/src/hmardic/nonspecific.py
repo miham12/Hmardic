@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict
 
 import pandas as pd
 import pyranges as pr
@@ -23,10 +23,10 @@ def build_nonspecific_index(nonspecific_contacts: pd.DataFrame) -> NonspecificIn
     if nonspecific_contacts is None or nonspecific_contacts.empty:
         return NonspecificIndex(ns_total_by_chr={}, pr_by_chr={})
 
-    df = nonspecific_contacts[["chr", "start", "end"]].copy()
-    df["chr"] = df["chr"].astype(str)
-    df["start"] = df["start"].astype(int)
-    df["end"] = df["end"].astype(int)
+    df = nonspecific_contacts.loc[:, ["chr", "start", "end"]].astype(
+        {"chr": str, "start": int, "end": int},
+        copy=False,
+    )
 
     ns_total = df["chr"].value_counts().to_dict()
 
@@ -34,4 +34,4 @@ def build_nonspecific_index(nonspecific_contacts: pd.DataFrame) -> NonspecificIn
     for chrom, g in df.groupby("chr", observed=True):
         pr_by_chr[str(chrom)] = as_pyranges_intervals(g, chrom_col="chr", start_col="start", end_col="end")
 
-    return NonspecificIndex(ns_total_by_chr=ns_total, pr_by_chr=pr_by_chr) 
+    return NonspecificIndex(ns_total_by_chr=ns_total, pr_by_chr=pr_by_chr)

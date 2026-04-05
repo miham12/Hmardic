@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import pandas as pd
 
 from .config import HmardicParams
 from .io import read_real_data

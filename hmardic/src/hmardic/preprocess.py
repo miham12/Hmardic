@@ -1,7 +1,7 @@
 # preprocess.py (DROP-IN replacement)
 from __future__ import annotations
 
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Mapping, Any
 
 import numpy as np
 import pandas as pd
@@ -290,7 +290,7 @@ def _fill_trans_counts_fast(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def preprocess_one_rna(
-    rna_row: pd.Series,
+    rna_row: Mapping[str, Any],
     rna_contacts: pd.DataFrame,
     chrom_sizes: pd.DataFrame,
     params: HmardicParams,

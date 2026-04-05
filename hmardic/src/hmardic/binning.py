@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 
@@ -15,16 +14,3 @@ def uniform_bins(chrom_length: int, bin_size: int) -> pd.DataFrame:
          "end": ends,
          "center": centers}
     )
-
-def build_trans_bins_by_chr(chrom_sizes: pd.DataFrame, bin_size: int) -> Dict[str, pd.DataFrame]:
-    by_chr: Dict[str, pd.DataFrame] = {}
-    for _, row in chrom_sizes.iterrows():
-        chr_name = row["chr"]
-        length = int(row["length"])
-        df = uniform_bins(length, bin_size)
-        df["dna_chr"] = chr_name
-        by_chr[chr_name] = df
-    return by_chr
-
-def concat_bins_by_chr(by_chr: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-    return pd.concat(by_chr.values(), ignore_index=True)

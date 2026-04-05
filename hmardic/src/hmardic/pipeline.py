@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Mapping
 
 import os
-import math
 import numpy as np
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -331,24 +330,22 @@ def _init_worker(chrom_sizes: pd.DataFrame, nonspecific_contacts: pd.DataFrame, 
 
 
 def _process_one_rna_worker(
-    rna_row_dict: Dict[str, Any],
+    rna_row_dict: Mapping[str, Any],
     cis_chr: str,
     rna_contacts: pd.DataFrame
-) -> Tuple[str, Optional[pd.DataFrame], pd.DataFrame]:
+) -> Tuple[Optional[pd.DataFrame], pd.DataFrame]:
 
     global _CTX, _PARAMS, _CHROM_SIZES
     assert _CTX is not None and _PARAMS is not None and _CHROM_SIZES is not None
 
-    rna_row = pd.Series(rna_row_dict)
-    bins_df = preprocess_one_rna(rna_row, rna_contacts, _CHROM_SIZES, _PARAMS, ctx=_CTX)
+    bins_df = preprocess_one_rna(rna_row_dict, rna_contacts, _CHROM_SIZES, _PARAMS, ctx=_CTX)
 
     bins_states = call_states(bins_df, _PARAMS, cis_chr=cis_chr)
     peaks = call_peaks(bins_states)
 
-    rna_id = str(rna_row_dict["rna"])
     if _PARAMS.return_all_bins:
-        return rna_id, bins_states, peaks
-    return rna_id, None, peaks
+        return bins_states, peaks
+    return None, peaks
 
 
 def run_calling(
@@ -375,11 +372,12 @@ def run_calling(
     rna_annot = rna_annot[rna_annot["rna"].astype(str).isin(rnas_with_contacts)]
     
     empty_cont = pd.DataFrame(columns=["chr", "start", "end"])
-    tasks = []
-    for _, row in rna_annot.iterrows():
-        rna = str(row["rna"])
-        cis_chr = str(row["chr"])
-        tasks.append((row.to_dict(), cis_chr, contacts_by_rna.get(rna, empty_cont)))
+    tasks: List[Tuple[Dict[str, Any], str, pd.DataFrame]] = []
+    for row in rna_annot.itertuples(index=False):
+        row_dict = {"chr": row.chr, "start": row.start, "end": row.end, "rna": row.rna}
+        rna = str(row.rna)
+        cis_chr = str(row.chr)
+        tasks.append((row_dict, cis_chr, contacts_by_rna.get(rna, empty_cont)))
 
     all_bins: Optional[List[pd.DataFrame]] = [] if getattr(params, "return_all_bins", False) else None
     all_peaks: List[pd.DataFrame] = []
@@ -390,8 +388,7 @@ def run_calling(
         ctx = build_context(chrom_sizes, ns_index, trans_cache=trans_cache)
 
         for row_dict, cis_chr, rna_cont in tasks:
-            rna_row = pd.Series(row_dict)
-            bins_df = preprocess_one_rna(rna_row, rna_cont, chrom_sizes, params, ctx=ctx)
+            bins_df = preprocess_one_rna(row_dict, rna_cont, chrom_sizes, params, ctx=ctx)
 
             bins_states = call_states(bins_df, params, cis_chr=cis_chr)
             peaks = call_peaks(bins_states) if (bins_states is not None and not bins_states.empty) else pd.DataFrame()
@@ -409,7 +406,7 @@ def run_calling(
         ) as ex:
             futs = [ex.submit(_process_one_rna_worker, row_dict, cis_chr, rna_cont) for row_dict, cis_chr, rna_cont in tasks]
             for fut in as_completed(futs):
-                _, bins_states, peaks = fut.result()
+                bins_states, peaks = fut.result()
                 if params.return_all_bins and all_bins is not None and bins_states is not None:
                     all_bins.append(bins_states)
                 all_peaks.append(peaks)
