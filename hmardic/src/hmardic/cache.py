@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, List
 
 import numpy as np
@@ -28,13 +28,14 @@ class TransBinCache:
     n_bins_by_chr: Dict[str, int]
 
 
-@dataclass(frozen=True)
+@dataclass
 class PrecomputeContext:
     """Everything we can (and should) precompute once per run (or once per worker)."""
     chrom_dict: Dict[str, int]         # chr -> length
     chrom_names: List[str]             # list of chr names in consistent order
     ns_index: NonspecificIndex
     trans_cache: Optional[TransBinCache] = None
+    trans_cache_by_bin_size: Dict[int, TransBinCache] = field(default_factory=dict)
 
 
 def build_trans_bin_cache(
@@ -128,4 +129,32 @@ def build_context(
 ) -> PrecomputeContext:
     chrom_dict = dict(zip(chrom_sizes["chr"].astype(str), chrom_sizes["length"].astype(int)))
     chrom_names = chrom_sizes["chr"].astype(str).tolist()
-    return PrecomputeContext(chrom_dict=chrom_dict, chrom_names=chrom_names, ns_index=ns_index, trans_cache=trans_cache)
+    cache_by_size: Dict[int, TransBinCache] = {}
+    if trans_cache is not None:
+        cache_by_size[int(trans_cache.bin_size)] = trans_cache
+    return PrecomputeContext(
+        chrom_dict=chrom_dict,
+        chrom_names=chrom_names,
+        ns_index=ns_index,
+        trans_cache=trans_cache,
+        trans_cache_by_bin_size=cache_by_size,
+    )
+
+
+def get_or_build_trans_bin_cache(
+    ctx: PrecomputeContext,
+    chrom_sizes: pd.DataFrame,
+    bin_size: int,
+    *,
+    pseudo: float,
+) -> TransBinCache:
+    key = int(bin_size)
+    cached = ctx.trans_cache_by_bin_size.get(key)
+    if cached is not None:
+        return cached
+
+    built = build_trans_bin_cache(chrom_sizes, key, ctx.ns_index, pseudo=pseudo)
+    ctx.trans_cache_by_bin_size[key] = built
+    if ctx.trans_cache is None:
+        ctx.trans_cache = built
+    return built

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .config import HmardicParams
-from .cache import PrecomputeContext, TransBinCache
+from .cache import PrecomputeContext, TransBinCache, get_or_build_trans_bin_cache
 from .nonspecific import NonspecificIndex
 from .binning import uniform_bins
 from .cis import preprocess_bins_for_rna
@@ -78,7 +78,7 @@ def _scaling_by_chr(
         return {}
     alpha = float(pseudo)
 
-    vc = rna_contacts["chr"].value_counts()  # chr already str in preprocess_one_rna
+    vc = rna_contacts["chr"].value_counts(sort=False)  # chr already str in preprocess_one_rna
     k = int(len(vc))
     denom = float(n_cont) + alpha * k
     if denom <= 0:
@@ -307,10 +307,10 @@ def preprocess_one_rna(
         rna_contacts = pd.DataFrame(columns=["chr","start","end"])
         n_cont = 0
     else:
-        rna_contacts = rna_contacts[["chr","start","end"]].copy()
-        rna_contacts["chr"] = rna_contacts["chr"].astype(str)
-        rna_contacts["start"] = rna_contacts["start"].astype(np.int64)
-        rna_contacts["end"] = rna_contacts["end"].astype(np.int64)
+        rna_contacts = rna_contacts.loc[:, ["chr", "start", "end"]].astype(
+            {"chr": str, "start": np.int64, "end": np.int64},
+            copy=False,
+        )
         n_cont = int(len(rna_contacts))
 
     # precomputed chromosome lengths/order + nonspecific index
@@ -363,8 +363,11 @@ def preprocess_one_rna(
 
     # TRANS bins (fast path: cache)
     trans_df = pd.DataFrame(columns=["rna","dna_chr","bin_index","start","end","center","sc","bkg","n_contacts"])
-    if ctx is not None and ctx.trans_cache is not None and ctx.trans_cache.bin_size == bin_size:
-        trans_cache = ctx.trans_cache
+    trans_cache: Optional[TransBinCache] = None
+    if ctx is not None:
+        trans_cache = get_or_build_trans_bin_cache(ctx, chrom_sizes, bin_size, pseudo=float(params.pseudo))
+
+    if trans_cache is not None:
         trans_df, slices = _trans_from_cache_fast(
             rna_name, rna_chr, trans_cache, sc_by_chr, pseudo=float(params.pseudo)
         )
