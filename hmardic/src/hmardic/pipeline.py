@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from .config import HmardicParams
 from .nonspecific import build_nonspecific_index
-from .cache import PrecomputeContext, build_trans_bin_cache, build_context
+from .cache import PrecomputeContext, build_uniform_bin_cache, build_context
 from .preprocess import preprocess_one_rna
 from .hmm import PoissonHMM, precompute_log_fact
 
@@ -323,10 +323,10 @@ def _init_worker(chrom_sizes: pd.DataFrame, nonspecific_contacts: pd.DataFrame, 
     precompute_log_fact(10000)
 
     ns_index = build_nonspecific_index(nonspecific_contacts)
-    trans_cache = None
-    if _PARAMS.fixed_bins:
-        trans_cache = build_trans_bin_cache(chrom_sizes, _PARAMS.bin_size, ns_index, pseudo=_PARAMS.pseudo)
-    _CTX = build_context(chrom_sizes, ns_index, trans_cache=trans_cache)
+    bin_cache = None
+    if _PARAMS.bin_size is not None:
+        bin_cache = build_uniform_bin_cache(chrom_sizes, _PARAMS.bin_size, ns_index, pseudo=_PARAMS.pseudo)
+    _CTX = build_context(chrom_sizes, ns_index, bin_cache=bin_cache)
 
 
 def _process_one_rna_worker(
@@ -384,8 +384,8 @@ def run_calling(
 
     if threads <= 1:
         ns_index = build_nonspecific_index(nonspecific_contacts)
-        trans_cache = build_trans_bin_cache(chrom_sizes, params.bin_size, ns_index, pseudo=params.pseudo) if params.fixed_bins else None
-        ctx = build_context(chrom_sizes, ns_index, trans_cache=trans_cache)
+        bin_cache = build_uniform_bin_cache(chrom_sizes, params.bin_size, ns_index, pseudo=params.pseudo) if params.bin_size is not None else None
+        ctx = build_context(chrom_sizes, ns_index, bin_cache=bin_cache)
 
         for row_dict, cis_chr, rna_cont in tasks:
             bins_df = preprocess_one_rna(row_dict, rna_cont, chrom_sizes, params, ctx=ctx)

@@ -12,14 +12,9 @@ from .overlaps import as_pyranges_intervals, overlaps_to_array
 
 
 @dataclass(frozen=True)
-class TransBinCache:
-    """Cached trans bins with precomputed global background per chromosome/bin.
+class UniformBinCache:
+    """Uniform genome bins with precomputed global background per bin."""
 
-    For each chromosome:
-      - bins_by_chr[chr] is a DataFrame with columns:
-          dna_chr, bin_index, start, end, center, bkg
-      - n_bins_by_chr[chr] is the number of bins on that chromosome
-    """
     bin_size: int
     bins_by_chr: Dict[str, pd.DataFrame]
     n_bins_by_chr: Dict[str, int]
@@ -27,31 +22,28 @@ class TransBinCache:
 
 @dataclass
 class PrecomputeContext:
-    """Everything we can (and should) precompute once per run (or once per worker)."""
-    chrom_dict: Dict[str, int]         # chr -> length
+    """Objects reused across many RNAs within one run/worker."""
+
+    chrom_dict: Dict[str, int]
     ns_index: NonspecificIndex
-    trans_cache: Optional[TransBinCache] = None
-    trans_cache_by_bin_size: Dict[int, TransBinCache] = field(default_factory=dict)
+    bin_cache: Optional[UniformBinCache] = None
+    bin_cache_by_bin_size: Dict[int, UniformBinCache] = field(default_factory=dict)
 
 
-def build_trans_bin_cache(
+def build_uniform_bin_cache(
     chrom_sizes: pd.DataFrame,
     bin_size: int,
     ns_index: NonspecificIndex,
     *,
     pseudo: float,
-) -> TransBinCache:
-    """Build trans bins once + precompute nonspecific background per trans bin once
-    using Dirichlet-style pseudocounts.
-    """
+) -> UniformBinCache:
     bins_by_chr: Dict[str, pd.DataFrame] = {}
     n_bins_by_chr: Dict[str, int] = {}
-
     alpha = float(pseudo)
 
-    for _, row in chrom_sizes.iterrows():
-        chrom = str(row["chr"])
-        length = int(row["length"])
+    for row in chrom_sizes.itertuples(index=False):
+        chrom = str(row.chr)
+        length = int(row.length)
 
         df = uniform_bins(length, int(bin_size))
         df["dna_chr"] = chrom
@@ -59,14 +51,12 @@ def build_trans_bin_cache(
         n_bins = int(len(df))
         n_bins_by_chr[chrom] = n_bins
 
-        # --- nonspecific background ---
         pr_ns = ns_index.pr_by_chr.get(chrom)
         ns_total = float(ns_index.ns_total_by_chr.get(chrom, 0))
 
         if pr_ns is None or n_bins == 0:
-            # no background data → pure prior
             denom = alpha * n_bins
-            bkg = np.full(n_bins, 1.0 / n_bins, dtype=float) if denom > 0 else np.zeros(n_bins, dtype=float)
+            bkg = np.full(n_bins, 1.0 / n_bins, dtype=np.float64) if denom > 0 else np.zeros(n_bins, dtype=np.float64)
         else:
             pr_bins = as_pyranges_intervals(
                 df.rename(columns={"dna_chr": "chr"})[["chr", "start", "end", "bin_index"]],
@@ -75,26 +65,14 @@ def build_trans_bin_cache(
                 end_col="end",
                 extra_cols=["bin_index"],
             )
-
-            ns_counts = overlaps_to_array(
-                pr_bins, pr_ns, id_col="bin_index", n_bins=n_bins
-            ).astype(float, copy=False)
-
+            ns_counts = overlaps_to_array(pr_bins, pr_ns, id_col="bin_index", n_bins=n_bins).astype(np.float64, copy=False)
             denom = ns_total + alpha * n_bins
-
-            if denom > 0:
-                # vectorized Dirichlet posterior mean
-                bkg = (ns_counts + alpha) / denom
-            else:
-                # theoretically unreachable, but safe fallback
-                bkg = np.full(n_bins, 1.0 / n_bins, dtype=float)
+            bkg = (ns_counts + alpha) / denom if denom > 0 else np.full(n_bins, 1.0 / n_bins, dtype=np.float64)
 
         df["bkg"] = bkg
-        bins_by_chr[chrom] = df[
-            ["dna_chr", "bin_index", "start", "end", "center", "bkg"]
-        ].copy()
+        bins_by_chr[chrom] = df[["dna_chr", "bin_index", "start", "end", "center", "bkg"]].copy()
 
-    return TransBinCache(
+    return UniformBinCache(
         bin_size=int(bin_size),
         bins_by_chr=bins_by_chr,
         n_bins_by_chr=n_bins_by_chr,
@@ -105,34 +83,34 @@ def build_context(
     chrom_sizes: pd.DataFrame,
     ns_index: NonspecificIndex,
     *,
-    trans_cache: Optional[TransBinCache] = None,
+    bin_cache: Optional[UniformBinCache] = None,
 ) -> PrecomputeContext:
     chrom_dict = dict(zip(chrom_sizes["chr"].astype(str), chrom_sizes["length"].astype(int)))
-    cache_by_size: Dict[int, TransBinCache] = {}
-    if trans_cache is not None:
-        cache_by_size[int(trans_cache.bin_size)] = trans_cache
+    cache_by_size: Dict[int, UniformBinCache] = {}
+    if bin_cache is not None:
+        cache_by_size[int(bin_cache.bin_size)] = bin_cache
     return PrecomputeContext(
         chrom_dict=chrom_dict,
         ns_index=ns_index,
-        trans_cache=trans_cache,
-        trans_cache_by_bin_size=cache_by_size,
+        bin_cache=bin_cache,
+        bin_cache_by_bin_size=cache_by_size,
     )
 
 
-def get_or_build_trans_bin_cache(
+def get_or_build_uniform_bin_cache(
     ctx: PrecomputeContext,
     chrom_sizes: pd.DataFrame,
     bin_size: int,
     *,
     pseudo: float,
-) -> TransBinCache:
+) -> UniformBinCache:
     key = int(bin_size)
-    cached = ctx.trans_cache_by_bin_size.get(key)
+    cached = ctx.bin_cache_by_bin_size.get(key)
     if cached is not None:
         return cached
 
-    built = build_trans_bin_cache(chrom_sizes, key, ctx.ns_index, pseudo=pseudo)
-    ctx.trans_cache_by_bin_size[key] = built
-    if ctx.trans_cache is None:
-        ctx.trans_cache = built
+    built = build_uniform_bin_cache(chrom_sizes, key, ctx.ns_index, pseudo=pseudo)
+    ctx.bin_cache_by_bin_size[key] = built
+    if ctx.bin_cache is None:
+        ctx.bin_cache = built
     return built
