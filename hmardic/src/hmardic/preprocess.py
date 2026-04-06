@@ -83,7 +83,14 @@ def _cis_scaling(
         rna_start - center_f,
         np.where(start_f >= rna_end, center_f - rna_end, 0.0),
     )
-    return cis_share * np.exp(-d / (decay * float(bin_size)))
+    raw = np.exp(-d / (decay * float(bin_size)))
+    total = float(raw.sum())
+    if total <= 0.0:
+        n_bins = raw.shape[0]
+        if n_bins == 0:
+            return raw
+        return np.full(n_bins, cis_share / n_bins, dtype=np.float64)
+    return cis_share * (raw / total)
 
 
 def _bins_from_cache_for_rna(
@@ -126,7 +133,8 @@ def _bins_from_cache_for_rna(
                 bin_size=bin_cache.bin_size,
             )
         else:
-            sc_arr = np.full(n, float(sc_by_chr.get(chrom, pseudo)), dtype=np.float64)
+            chrom_share = float(sc_by_chr.get(chrom, pseudo))
+            sc_arr = np.full(n, chrom_share / n, dtype=np.float64)
 
         sc_col.append(sc_arr.astype(np.float64, copy=False))
         slices[chrom] = (cursor, cursor + n)
