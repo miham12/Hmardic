@@ -52,7 +52,6 @@ def build_uniform_bin_cache(
         n_bins_by_chr[chrom] = n_bins
 
         pr_ns = ns_index.pr_by_chr.get(chrom)
-        ns_total = float(ns_index.ns_total_by_chr.get(chrom, 0))
 
         if pr_ns is None or n_bins == 0:
             denom = alpha * n_bins
@@ -66,7 +65,7 @@ def build_uniform_bin_cache(
                 extra_cols=["bin_index"],
             )
             ns_counts = overlaps_to_array(pr_bins, pr_ns, id_col="bin_index", n_bins=n_bins).astype(np.float64, copy=False)
-            denom = ns_total + alpha * n_bins
+            denom = float(ns_counts.sum()) + alpha * n_bins
             bkg = (ns_counts + alpha) / denom if denom > 0 else np.full(n_bins, 1.0 / n_bins, dtype=np.float64)
 
         df["bkg"] = bkg

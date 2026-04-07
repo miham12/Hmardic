@@ -50,13 +50,23 @@ def _scaling_by_chr(
     rna_contacts: pd.DataFrame,
     n_cont: int,
     pseudo: float,
+    chrom_names: List[str],
 ) -> Dict[str, float]:
-    if rna_contacts is None or rna_contacts.empty or n_cont <= 0:
+    if not chrom_names:
         return {}
 
     alpha = float(pseudo)
-    vc = rna_contacts["chr"].value_counts(sort=False)
-    k = int(len(vc))
+    if rna_contacts is None or rna_contacts.empty or n_cont <= 0:
+        vc = pd.Series(0.0, index=chrom_names, dtype=np.float64)
+    else:
+        vc = (
+            rna_contacts["chr"]
+            .value_counts(sort=False)
+            .reindex(chrom_names, fill_value=0)
+            .astype(np.float64, copy=False)
+        )
+
+    k = int(len(chrom_names))
     denom = float(n_cont) + alpha * k
     if denom <= 0:
         return {}
@@ -157,6 +167,42 @@ def _bins_from_cache_for_rna(
     return pd.DataFrame(out), slices
 
 
+def _combine_sc_and_bkg_by_chr(bins_df: pd.DataFrame, slices: Dict[str, Tuple[int, int]]) -> np.ndarray:
+    """Combine chromosome mass from sc with local sc/background profiles inside each chromosome."""
+    n = len(bins_df)
+    if n == 0:
+        return np.zeros(0, dtype=np.float64)
+
+    out = np.zeros(n, dtype=np.float64)
+    sc = bins_df["sc"].to_numpy(np.float64, copy=False)
+    bkg = bins_df["bkg"].to_numpy(np.float64, copy=False)
+
+    for lo, hi in slices.values():
+        sc_chr = sc[lo:hi]
+        bkg_chr = bkg[lo:hi]
+        n_chr = hi - lo
+        if n_chr <= 0:
+            continue
+
+        chr_mass = float(sc_chr.sum())
+        if chr_mass <= 0.0:
+            continue
+
+        sc_local = sc_chr / chr_mass
+        bkg_sum = float(bkg_chr.sum())
+        bkg_local = (bkg_chr / bkg_sum) if bkg_sum > 0.0 else np.full(n_chr, 1.0 / n_chr, dtype=np.float64)
+
+        combined = sc_local * bkg_local
+        combined_sum = float(combined.sum())
+        out[lo:hi] = (
+            chr_mass * (combined / combined_sum)
+            if combined_sum > 0.0
+            else np.full(n_chr, chr_mass / n_chr, dtype=np.float64)
+        )
+
+    return out
+
+
 def _fill_counts_from_cache(
     bins_df: pd.DataFrame,
     slices: Dict[str, Tuple[int, int]],
@@ -217,6 +263,7 @@ def preprocess_one_rna(
         chrom_dict = ctx.chrom_dict
     else:
         chrom_dict = dict(zip(chrom_sizes["chr"].astype(str), chrom_sizes["length"].astype(int)))
+    chrom_names = list(chrom_dict.keys())
 
     bin_size = params.bin_size
     if bin_size is None:
@@ -233,7 +280,7 @@ def preprocess_one_rna(
         )
     bin_size = int(bin_size)
 
-    sc_by_chr = _scaling_by_chr(rna_contacts, n_cont, params.pseudo)
+    sc_by_chr = _scaling_by_chr(rna_contacts, n_cont, params.pseudo, chrom_names)
 
     if ctx is not None:
         bin_cache = get_or_build_uniform_bin_cache(ctx, chrom_sizes, bin_size, pseudo=float(params.pseudo))
@@ -253,15 +300,13 @@ def preprocess_one_rna(
     )
     bins_df = _fill_counts_from_cache(bins_df, slices, rna_contacts, bin_cache)
 
-    sc = bins_df["sc"].to_numpy(np.float64, copy=False)
-    bkg = bins_df["bkg"].to_numpy(np.float64, copy=False)
-    bins_df["f"] = sc * bkg
+    bins_df["f"] = _combine_sc_and_bkg_by_chr(bins_df, slices)
     total_f = float(bins_df["f"].sum())
 
     if total_f == 0.0:
         bins_df["lambda"] = float(params.min_lambda)
     else:
-        bins_df["lambda"] = (float(n_cont) / total_f) * bins_df["f"]
+        bins_df["lambda"] = float(n_cont) * (bins_df["f"] / total_f)
 
     desired = ["rna", "dna_chr", "bin_index", "start", "end", "center", "sc", "bkg", "f", "lambda", "n_contacts"]
     return bins_df[desired]
